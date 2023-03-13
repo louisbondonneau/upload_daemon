@@ -24,7 +24,7 @@ import smtplib
 from pathlib import Path
 import threading
 
-Version = "00.01.00"
+Version = "00.02.00"
 DEBUG = False  # !!! the simple print in DEBUG cause crash after closing session
 Host_name = socket.gethostname()
 Deamon_name = 'Deamon_' + Host_name
@@ -77,24 +77,24 @@ class Log_class():
         with open(self.dir + self.logname + '.log', 'a') as log_file:
             for istring in string:
                 print(istring, file=log_file)
-                if(DEBUG):
-                    print('LOG: ' + istring)
+                # if(DEBUG):
+                #     print('LOG: ' + istring)
 
     def warning(self, msg, objet='WARNING', timing=True):
         string = self.__string_formating(msg, objet=objet, timing=timing)
         with open(self.dir + self.logname + '.warning', 'a') as warning_file:
             for istring in string:
                 print(istring, file=warning_file)
-                if(DEBUG):
-                    print('WAR: ' + istring)
+                # if(DEBUG):
+                #     print('WAR: ' + istring)
 
     def error(self, msg, objet='ERROR', timing=True):
         string = self.__string_formating(msg, objet=objet, timing=timing)
         with open(self.dir + self.logname + '.error', 'a') as error_file:
             for istring in string:
                 print(istring, file=error_file)
-                if(DEBUG):
-                    print('ERR: ' + istring)
+                # if(DEBUG):
+                #     print('ERR: ' + istring)
 
     def __timing_string(self):
         time_string = datetime.now()
@@ -152,8 +152,60 @@ class Log_class():
             target = target + os.path.basename(file_)
         elif os.path.isfile(target):
             self.check_file_validity(target)
+        # self.log("move file from %s to %s" % (file_, target), objet=Deamon_name)
         shutil.move(file_, target)
         self.check_file_validity(target)
+
+    def attach_file(self, msg, nom_fichier):
+        if os.path.isfile(nom_fichier):
+            piece = open(nom_fichier, "rb")
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload((piece).read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', "piece; filename= %s" % os.path.basename(nom_fichier))
+            msg.attach(part)
+
+    def sendMail(self, mail, subject, text, files=[]):
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = socket.gethostname() + '@obs-nancay.fr'
+            msg['To'] = mail
+            msg['Subject'] = subject
+            msg.attach(MIMEText(text))
+            if (len(files) > 0):
+                for ifile in range(len(files)):
+                    self.attach_file(msg, files[ifile])
+                    # print(files[ifile])
+            mailserver = smtplib.SMTP('localhost')
+            # mailserver.set_debuglevel(1)
+            mailserver.sendmail(msg['From'], msg['To'].split(','), msg.as_string())
+            mailserver.quit()
+            self.log('Send a mail: \"%s\"" to %s' % (subject, mail), objet=Deamon_name)
+        except:
+            self.traceback_toerror(objet=Deamon_name)
+
+    def traceback_tomail(self, mail, objet=Deamon_name):
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_print = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        for tb in traceback_print:
+            self.error(tb, objet=objet, timing=True)
+        self.sendMail(mail, "Error while running %s" % Deamon_name,
+                      "An error occure while running %s" % Deamon_name,
+                      [self.dir + self.logname + '.log',
+                       self.dir + self.logname + '.warning',
+                       self.dir + self.logname + '.error'])
+
+    def traceback_toerror(self, objet=Deamon_name):
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_print = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        for tb in traceback_print:
+            self.error(tb, objet=objet, timing=True)
+
+    def traceback_towarning(self, objet=Deamon_name):
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        traceback_print = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        for tb in traceback_print:
+            self.warning(tb, objet=objet, timing=True)
 
 
 class Daemon(object):
@@ -163,7 +215,7 @@ class Daemon(object):
     """
 
     def __init__(self):
-        self.ver = 0.1  # version
+        self.ver = Version
         self.restartPause = 1    # 0 means without a pause between stop and start during the restart of the daemon
         self.waitToHardKill = 3600  # when terminate a process, wait until kill the process with SIGTERM signal
         self.isReloadSignal = False
@@ -178,21 +230,26 @@ class Daemon(object):
         self.__init_config__()
 
     def __init_config__(self):
+        def clean_dirname(string_tmp):
+            if(string_tmp[-1] != '/'):
+                string_tmp = string_tmp + '/'
+            return string_tmp
+
         self.config = CONFIG_READER(CONFIG_FILE, log_obj=self.log)
         self.logdir = self.config.get_config('UPLOAD', 'logdir')
         self.log.set_dir(self.logdir)
         self.pauseRunLoop = self.config.get_config('UPLOAD', 'UPDATE_TIME')
-        self.script_dir = self.config.get_config('UPLOAD', 'script_dir')
-        if (self.script_dir == ''):
-            self.log.error("script_dir in the configuration file can not be empty.", objet='DAEMON_CONF')
-        if(self.script_dir[-1] != '/'):
-            self.script_dir = self.script_dir + '/'
+        self.script_dir = clean_dirname(self.config.get_config('UPLOAD', 'script_dir'))
+        if (self.script_dir == '/'):
+            self.log.error("script_dir in the configuration file should not be empty or root.", objet='DAEMON_CONF')
 
-        self.script_logdir = self.config.get_config('UPLOAD', 'script_logdir')
-        if (self.script_logdir == ''):
+        self.script_logdir = clean_dirname(self.config.get_config('UPLOAD', 'script_logdir'))
+        if (self.script_logdir == '/'):
+            self.log.warning("script_logdir in the configuration file should not be empty or root. (default is logdir)", objet='DAEMON_CONF')
             self.script_logdir = self.logdir
-        if(self.script_logdir[-1] != '/'):
-            self.script_logdir = self.script_logdir + '/'
+
+        self.script_dir_finish = clean_dirname(self.config.get_config('UPLOAD', 'script_dir_finish'))
+        self.script_dir_error = clean_dirname(self.config.get_config('UPLOAD', 'script_dir_error'))
 
         # self.id = self.config.get_config('UPLOAD', 'id_prog')
 
@@ -245,14 +302,23 @@ class Daemon(object):
         if processName is None:
             processName = self.processName
         procs = []
+        tbavoid = ['sleep', 'wakeup']
         for p in psutil.process_iter():
-            if self.processName in [part.split('/')[-1] for part in p.cmdline()]:
+            if (self.processName in [part.split('/')[-1] for part in p.cmdline()]):
                 # Skip  the current process
+                process_tbavoided = False
+                for avoid_string in tbavoid:
+                    if (avoid_string in [part.split('/')[-1] for part in p.cmdline()]):
+                        process_tbavoided = True
+                        break
+                if (process_tbavoided):
+                    continue
                 if p.pid != os.getpid():
                     procs.append(p)
                     # children_procs = p.children(recursive=True)
                     # for f in children_procs:
                     #     procs.insert(0, f)
+                    continue
         return procs
 
     def script_from_cmdline(self, cmdline):
@@ -282,11 +348,23 @@ class Daemon(object):
             return 'stopped'
 
     def get_script_liste(self):
+
+        # ZENITH_TRANSIT_CHECK_CLIM_20191116_215936.script-postobs-rsync
+        # GJ_1151_TRACKING_20220531_150036.script-postobs-rsync
+        # SUN_TRACKING_20220531_091036.script-postobs-rsync
+        # GJ_486_TRACKING_20220607_180036.script-postobs-rsync
+        # GJ_486_TRACKING_20220607_180036.script-postobs-rsyncfast
+
+        # B2217+47_D20211205T1704_59553_251751_0075_BEAM1_script.sh
+        # JUPITER_1242.undysputedbk1.2021-11-03T15:49:10.000_script.sh
+        # J0139+3310_D20220607T0901_59737_252135_0071_BEAM1_script.sh
+        # J0139+3310_D20220607T0901_59737_252135_0071_BEAM1_script_fast.sh
+
         # catch the liste of script in script_dir and sort it by date (FIFO)
-        liste_in_script_dir = sorted(Path(self.script_dir).iterdir(), key=os.path.getmtime)
+        liste_in_script_dir = sorted([str(i) for i in Path(self.script_dir).iterdir()], key=os.path.getmtime)
         file_liste = []
         for file_or_dir in liste_in_script_dir:
-            if(file_or_dir.is_file()):
+            if(Path(file_or_dir).is_file()):
                 file_liste.append(str(file_or_dir))
         return file_liste
 
@@ -297,8 +375,14 @@ class Daemon(object):
                                                                             'cmdline': p.cmdline(),
                                                                             'obj': p} for p in psutil.process_iter()}
         except psutil.NoSuchProcess:
-            self.log.warning('Something went wrong with psutil, will pass this loop', objet=Deamon_name)
-            return
+            try:
+                self.process_dico = {"%s_pid%s" % (str(p.name()), str(p.pid)): {'pid': p.pid,
+                                                                                'status': p.status(),
+                                                                                'cmdline': p.cmdline(),
+                                                                                'obj': p} for p in psutil.process_iter()}
+            except psutil.NoSuchProcess:
+                self.log.warning('Something went wrong with psutil, will pass this loop', objet=Deamon_name)
+                return
         # current_process = list(key.split('_pid')[0] for key in self.process_dico.keys())
         current_process_info = list(self.process_dico.values())
         current_scripts = list((self.script_from_cmdline(dico['cmdline'])) for dico in current_process_info)
@@ -343,7 +427,7 @@ class Daemon(object):
                     obj = [current_process_info[index]['obj']]
                     try:
                         children_procs = current_process_info[index]['obj'].children(recursive=True)
-                    except psutil._exceptions.NoSuchProcess:
+                    except psutil.NoSuchProcess:
                         m = "Fail Sending SIGHUP signal into the process %s with PID." % (self.processName, str(current_process_info[index]['obj'].pid))
                         self.log.warning(m, objet=Deamon_name)
                     for f in children_procs:
@@ -365,51 +449,55 @@ class Daemon(object):
                 self.nSLOW += 1
 
     def launch_script(self, script, mode=""):
-        log_script = Log_class(logname=os.path.basename(script), logdir=self.script_logdir)
         try:
+            log_script = Log_class(logname=os.path.basename(script), logdir=self.script_logdir)
             log_script.check_file_validity(script)
-        except NameError:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            traceback_print = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            for tb in traceback_print:
-                log_script.warning(tb, objet='launch_script', timing=True)
+            cmd = "bash %s %s &" % (script, mode)
+            script_out = log_script.dir + log_script.logname + '.log'
+            script_err = log_script.dir + log_script.logname + '.error'
+            with open(script_out, "a") as out, open(script_err, "a") as err:
+                proc = subprocess.Popen(cmd.split(' '), start_new_session=True, stdout=out, stderr=err)
+                try:
+                    # self.log.log('Start Command: [%s]' % (cmd), objet='rsync')
+                    stdout_data, stderr_data = proc.communicate(timeout=self.script_timeout)
+                    if (proc.returncode == 0):
+                        proc_success = True
+                    elif (proc.returncode == 1):
+                        proc_success = True
+                    elif (proc.returncode != 0):
+                        proc_success = False
+                        log_script.error(
+                            "%r failed, status code %s stdout %r stderr %r" % (
+                                cmd, proc.returncode,
+                                stdout_data, stderr_data), objet='launch_script')
+                    log_script.log('script success: [%s]' % (cmd), objet='launch_script')
+                except subprocess.TimeoutExpired as e:
+                    proc_success = False
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    log_script.error('script TimeoutExpired: [%s]' % e, objet='launch_script')
+                except subprocess.SubprocessError as e:
+                    proc_success = False
+                    # os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    log_script.error('script SubprocessError: [%s]' % e, objet='launch_script')
+            self.log.log("%s STOP %s" % (script, mode.upper()), objet=Deamon_name)
 
-        cmd = "bash %s %s &" % (script, mode)
-        script_out = log_script.dir + log_script.logname + '.log'
-        script_err = log_script.dir + log_script.logname + '.error'
-        with open(script_out, "a") as out, open(script_err, "a") as err:
-            proc = subprocess.Popen(cmd.split(' '), start_new_session=True, stdout=out, stderr=err)
-            try:
-                # self.log.log('Start Command: [%s]' % (cmd), objet='rsync')
-                stdout_data, stderr_data = proc.communicate(timeout=self.script_timeout)
-                if proc.returncode != 0:
-                    log_script.error(
-                        "%r failed, status code %s stdout %r stderr %r" % (
-                            cmd, proc.returncode,
-                            stdout_data, stderr_data), objet='launch_script')
-                log_script.log('script success: [%s]' % (cmd), objet='launch_script')
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                log_script.error('script error: [%s]' % e, objet='launch_script')
-        log_script.movefile(script, self.script_logdir)
-        self.log.log("%s STOP %s" % (script, mode.upper()), objet=Deamon_name)
-
-        # delete the .error file if empty
-        if os.path.getsize(script_err) == 0:
-            try:
-                os.remove(script_err)
-            except:
-                pass
-        else:
-            try:
-                self.sendMail(Deamon_name + " error %s" % os.path.basename(script),
-                              "An error ocure durring the execution of %s " % os.path.basename(script),
-                              [script, script_out, script_err])
-            except:
-                exc_type, exc_value, exc_traceback = sys.exc_info()
-                traceback_print = traceback.format_exception(exc_type, exc_value, exc_traceback)
-                for tb in traceback_print:
-                    log_script.error(tb, objet='launch_script', timing=True)
+            # delete the .error file if empty
+            if (proc_success):
+                try:
+                    os.remove(script_err)
+                except:
+                    pass
+                log_script.movefile(script, self.script_dir_finish)
+                log_script.movefile(script_out, self.script_logdir)
+            else:
+                self.log.sendMail(self.mail_error, Deamon_name + " error %s" % os.path.basename(script),
+                                  "An error ocure durring the execution of %s " % os.path.basename(script),
+                                  [script, script_out, script_err])
+                log_script.movefile(script, self.script_dir_error)
+                log_script.movefile(script_out, self.script_dir_error)
+                log_script.movefile(script_err, self.script_dir_error)
+        except:
+            log_script.traceback_tomail(self.mail_error, objet=Deamon_name)
 
     def start(self):
         """
@@ -427,7 +515,7 @@ class Daemon(object):
                 self.log.warning(m, objet=Deamon_name)
             sys.exit(1)
         else:
-            m = "Start the daemon version %s" % str(self.ver)
+            m = "Start the daemon version %s" % (str(self.ver))
             self.log.log(m, objet=Deamon_name)
         # Daemonize the main process
         self._makeDaemon()
@@ -448,7 +536,7 @@ class Daemon(object):
                 try:
                     m = "The daemon %s is %s with PID %s." % (self.processName, str(p.status()), str(p.pid))
                     self.log.log(m, objet=Deamon_name)
-                except psutil._exceptions.NoSuchProcess:
+                except psutil.NoSuchProcess:
                     m = "The daemon %s is stopped" % (self.processName)
                     self.log.log(m, objet=Deamon_name)
         else:
@@ -476,7 +564,7 @@ class Daemon(object):
                     if(DEBUG):
                         m = "Send SIGHUP signal into the daemon process %s with PID." % (self.processName, str(p.pid))
                         self.log.log(m, objet=Deamon_name)
-                except psutil._exceptions.NoSuchProcess:
+                except psutil.NoSuchProcess:
                     m = "Fail Sending SIGHUP signal into the process %s with PID." % (self.processName, str(p.pid))
                     self.log.warning(m, objet=Deamon_name)
         else:
@@ -504,7 +592,7 @@ class Daemon(object):
                         if(DEBUG):
                             m = "Send SIGSTOP signal into the script %s from %s with PID %s." % (script, str(p.name()), str(p.pid))
                             self.log.log(m, objet=Deamon_name)
-                    except psutil._exceptions.NoSuchProcess:
+                    except psutil.NoSuchProcess:
                         m = "Fail Sending SIGSTOP signal into the script %s from %s with PID %s: NoSuchProcess." % (script, str(p.name()), str(p.pid))
                         self.log.warning(m, objet=Deamon_name)
                 if sleep_time is not None:
@@ -518,23 +606,25 @@ class Daemon(object):
                             m = "sleep Fork failed"
                             self.log.error(m, objet=Deamon_name)
                             sys.exit(1)
-                        m = "The daemon sleeping process is going to background for %s sec." % str(sleep_time)
+                        m = "The daemon child processes is asleep for %s sec." % str(sleep_time)
                         self.log.log(m, objet=Deamon_name)
                         time.sleep(int(sleep_time))
                         self.log.log("%s WAKEUP" % script, objet=Deamon_name)
                         for p in script_info['obj']:
-                            if (p.status() == "stopped"):
-                                try:
-                                    os.kill(p.pid, signal.SIGCONT)
-                                    if(DEBUG):
+                            try:
+                                if (p.status() == "stopped"):
+                                    try:
+                                        os.kill(p.pid, signal.SIGCONT)
                                         m = "Send SIGCONT signal into the script %s from %s with PID %s." % (script, str(p.name()), str(p.pid))
                                         self.log.log(m, objet=Deamon_name)
-                                except psutil._exceptions.NoSuchProcess:
-                                    m = "Fail Sending SIGCONT signal into the script %s from %s with PID %s: NoSuchProcess." % (
-                                        script, str(p.name()), str(p.pid))
-                                    self.log.warning(m, objet=Deamon_name)
-                            else:
-                                m = "The script %s with PID %s is already awake." % (script, str(p.pid))
+                                    except psutil.NoSuchProcess:
+                                        m = "Fail Sending SIGCONT signal into the script %s from %s with PID %s: NoSuchProcess." % (
+                                            script, str(p.name()), str(p.pid))
+                                        self.log.warning(m, objet=Deamon_name)
+                                else:
+                                    m = "The script %s with PID %s is already awake." % (script, str(p.pid))
+                            except psutil.NoSuchProcess:
+                                m = "The script %s with PID %s is already vanished." % (script, str(p.pid))
                             self.log.log(m, objet=Deamon_name)
                         sys.exit(0)
 
@@ -545,11 +635,13 @@ class Daemon(object):
                 try:
                     os.kill(p.pid, signal.SIGSTOP)
                     if(DEBUG):
-                        m = "Send SIGSTOP signal into the daemon process %s with PID %s." % (self.processName, str(p.pid))
+                        m = "Send SIGSTOP signal into the daemon process %s/%s/%s with PID %s." % (
+                            str(p.name()), str(p.cmdline()), self.processName, str(p.pid))
                         self.log.log(m, objet=Deamon_name)
-                except psutil._exceptions.NoSuchProcess:
+                except psutil.NoSuchProcess:
                     m = "Fail Sending SIGSTOP signal into the daemon process %s with PID %s: NoSuchProcess." % (self.processName, str(p.pid))
                     self.log.warning(m, objet=Deamon_name)
+
             if sleep_time is not None:
                 if (int(sleep_time) > 0):
                     try:
@@ -561,22 +653,21 @@ class Daemon(object):
                         m = "sleep Fork failed"
                         self.log.error(m, objet=Deamon_name)
                         sys.exit(1)
-                    m = "The daemon sleeping process is going to background for %s sec." % str(sleep_time)
+                    m = "The daemon himself is asleep for %s sec." % str(sleep_time)
                     self.log.log(m, objet=Deamon_name)
                     time.sleep(int(sleep_time))
                     for p in procs:
-                        if (p.status() == "stopped"):
-                            try:
+                        try:
+                            if (p.status() == "stopped"):
                                 os.kill(p.pid, signal.SIGCONT)  # todo verif status "stopped"
-                                if(DEBUG):
-                                    m = "Send SIGCONT signal into the daemon process %s with PID %s." % (self.processName, str(p.pid))
-                                    self.log.log(m, objet=Deamon_name)
-                            except psutil._exceptions.NoSuchProcess:
-                                m = "Fail Sending SIGCONT signal into the daemon process %s with PID %s: NoSuchProcess." % (self.processName, str(p.pid))
-                                self.log.warning(m, objet=Deamon_name)
-                        else:
-                            m = "The daemon process %s with PID %s is already awake." % (self.processName, str(p.pid))
-                        self.log.log(m, objet=Deamon_name)
+                                m = "Send SIGCONT signal into the daemon process %s with PID %s." % (self.processName, str(p.pid))
+                                self.log.log(m, objet=Deamon_name)
+                            else:
+                                m = "The daemon process %s with PID %s is already awake." % (self.processName, str(p.pid))
+                                self.log.log(m, objet=Deamon_name)
+                        except psutil.NoSuchProcess:
+                            m = "Fail Sending SIGCONT signal into the daemon process %s with PID %s: NoSuchProcess." % (self.processName, str(p.pid))
+                            self.log.warning(m, objet=Deamon_name)
                     sys.exit(0)
         else:
             m = "The daemon is not running!"
@@ -612,6 +703,8 @@ class Daemon(object):
                 m = "The daemon process %s with PID %s was killed with SIGTERM!" % (self.processName, str(p.pid))
                 self.log.log(m, objet=Deamon_name)
                 p.kill()
+            m = "The daemon process %s is stopped" % (self.processName)
+            self.log.log(m, objet=Deamon_name)
         else:
             m = "Cannot find some daemon process, I will do nothing."
             self.log.warning(m, objet=Deamon_name)
@@ -636,7 +729,7 @@ class Daemon(object):
                         if(DEBUG):
                             m = "Send SIGKILL signal into the script %s from %s with PID %s." % (script, str(p.name()), str(p.pid))
                             self.log.log(m, objet=Deamon_name)
-                    except psutil._exceptions.NoSuchProcess:
+                    except psutil.NoSuchProcess:
                         m = "Fail Sending SIGKILL signal into the script %s from %s with PID %s: NoSuchProcess." % (script, str(p.name()), str(p.pid))
                         self.log.warning(m, objet=Deamon_name)
         self.waitToHardKill = 10
@@ -668,10 +761,9 @@ class Daemon(object):
                 for p in script_info['obj']:
                     try:
                         os.kill(p.pid, signal.SIGCONT)
-                        if(DEBUG):
-                            m = "Send SIGCONT signal into the script %s from %s with PID %s." % (script, str(p.name()), str(p.pid))
-                            self.log.log(m, objet=Deamon_name)
-                    except psutil._exceptions.NoSuchProcess:
+                        m = "Send SIGCONT signal into the script %s from %s with PID %s." % (script, str(p.name()), str(p.pid))
+                        self.log.log(m, objet=Deamon_name)
+                    except psutil.NoSuchProcess:
                         m = "Fail Sending SIGCONT signal into the script %s from %s with PID %s: NoSuchProcess." % (script, str(p.name()), str(p.pid))
                         self.log.warning(m, objet=Deamon_name)
 
@@ -681,10 +773,9 @@ class Daemon(object):
             for p in procs:
                 try:
                     os.kill(p.pid, signal.SIGCONT)  # todo verif status "stopped"
-                    if(DEBUG):
-                        m = "Send SIGCONT signal into the daemon process %s from %s  with PID %s." % (str(p.name()), self.processName, str(p.pid))
-                        self.log.log(m, objet=Deamon_name)
-                except psutil._exceptions.NoSuchProcess:
+                    m = "Send SIGCONT signal into the daemon process %s from %s  with PID %s." % (str(p.name()), self.processName, str(p.pid))
+                    self.log.log(m, objet=Deamon_name)
+                except psutil.NoSuchProcess:
                     m = "Fail Sending SIGCONT signal into the daemon process %s from %s with PID %s: NoSuchProcess." % (
                         str(p.name()), self.processName, str(p.pid))
                     self.log.warning(m, objet=Deamon_name)
@@ -719,7 +810,7 @@ class Daemon(object):
                         if(DEBUG):
                             m = "Send SIGSTOP signal into the process %s from %s with PID %s." % (process, str(p.name()), str(p.pid))
                             self.log.log(m, objet=Deamon_name)
-                    except psutil._exceptions.NoSuchProcess:
+                    except psutil.NoSuchProcess:
                         m = "Fail Sending SIGSTOP signal into the process %s from %s with PID %s: NoSuchProcess." % (process, str(p.name()), str(p.pid))
                         self.log.warning(m, objet=Deamon_name)
                 if sleep_time is not None:
@@ -744,7 +835,7 @@ class Daemon(object):
                                     if(DEBUG):
                                         m = "Send SIGCONT signal into the process %s from %s with PID %s." % (process, str(p.name()), str(p.pid))
                                         self.log.log(m, objet=Deamon_name)
-                                except psutil._exceptions.NoSuchProcess:
+                                except psutil.NoSuchProcess:
                                     m = "Fail Sending SIGCONT signal into the process %s from %s with PID %s: NoSuchProcess." % (
                                         process, str(p.name()), str(p.pid))
                                     self.log.warning(m, objet=Deamon_name)
@@ -755,31 +846,6 @@ class Daemon(object):
             else:
                 m = "The script %s is not running" % process
                 self.log.log(m, objet=Deamon_name)
-
-    def attach_file(self, msg, nom_fichier):
-        if os.path.isfile(nom_fichier):
-            piece = open(nom_fichier, "rb")
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload((piece).read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', "piece; filename= %s" % os.path.basename(nom_fichier))
-            msg.attach(part)
-
-    def sendMail(self, subject, text, files=[]):
-        msg = MIMEMultipart()
-        msg['From'] = socket.gethostname() + '@obs-nancay.fr'
-        msg['To'] = self.mail_error
-        msg['Subject'] = subject
-        msg.attach(MIMEText(text))
-        if (len(files) > 0):
-            for ifile in range(len(files)):
-                self.attach_file(msg, files[ifile])
-                # print(files[ifile])
-        mailserver = smtplib.SMTP('localhost')
-        # mailserver.set_debuglevel(1)
-        mailserver.sendmail(msg['From'], msg['To'].split(','), msg.as_string())
-        mailserver.quit()
-        self.log.log('Send a mail: \"%s\"" to %s' % (subject, self.mail_error), objet=Deamon_name)
 
     def _infiniteLoop(self):
         self.i = 0
@@ -797,15 +863,7 @@ class Daemon(object):
                 while self._canDaemonRun:
                     self.run()
         except Exception:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            traceback_print = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            for tb in traceback_print:
-                self.log.error(tb, objet=Deamon_name, timing=True)
-                self.sendmail("Error while running %s" % Deamon_name,
-                              "An error occure while running %s" % Deamon_name,
-                              [self.log.dir + self.log.logname + '.log',
-                               self.log.dir + self.log.logname + '.warning',
-                               self.log.dir + self.log.logname + '.error'])
+            self.log.traceback_tomail(self.mail_error, objet=Deamon_name)
             sys.exit(1)
     # this method you have to override
 
@@ -832,17 +890,6 @@ class UploadScript(Daemon):
             self.log.log("Receved reload signal", objet='UploadDeamon')
             self.isReloadSignal = False
             self.__init__()
-
-        # ZENITH_TRANSIT_CHECK_CLIM_20191116_215936.script-postobs-rsync
-        # GJ_1151_TRACKING_20220531_150036.script-postobs-rsync
-        # SUN_TRACKING_20220531_091036.script-postobs-rsync
-        # GJ_486_TRACKING_20220607_180036.script-postobs-rsync
-        # GJ_486_TRACKING_20220607_180036.script-postobs-rsyncfast
-        
-        # B2217+47_D20211205T1704_59553_251751_0075_BEAM1_script.sh
-        # JUPITER_1242.undysputedbk1.2021-11-03T15:49:10.000_script.sh
-        # J0139+3310_D20220607T0901_59737_252135_0071_BEAM1_script.sh
-        # J0139+3310_D20220607T0901_59737_252135_0071_BEAM1_script_fast.sh
 
         self.new_script_liste = self.get_script_liste()
         self.get_script_status(self.new_script_liste)
